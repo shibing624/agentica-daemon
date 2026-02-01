@@ -205,3 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+update_tech*.md
+.codebuddy/
+CLAUDE.md
