@@ -64,7 +64,7 @@ PORT=8789
 
 # 模型配置
 MODEL_PROVIDER=zhipuai   # zhipuai / openai / deepseek
-MODEL_NAME=glm-4-flash
+MODEL_NAME=glm-4.7-flash
 
 # Gradio WebUI
 GRADIO_ENABLED=true
