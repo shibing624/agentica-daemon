@@ -2,12 +2,12 @@
 
 Python 版 OpenClaw Gateway 服务，调用 [agentica](https://github.com/shibing624/agentica) SDK。
 
-支持飞书、Telegram、Discord 等多渠道接入的 AI Agent 网关。
+支持飞书、Telegram、Discord、Gradio 等多渠道接入的 AI Agent 网关。
 
 ## 特性
 
 - **FastAPI 服务** - REST API + WebSocket Gateway
-- **多渠道支持** - 飞书 / Telegram / Discord
+- **多渠道支持** - Gradio / 飞书 / Telegram / Discord
 - **调用 agentica SDK** - Agent / Memory / Skills / Tools
 - **消息路由** - 多 Agent 路由支持
 - **定时任务** - APScheduler Cron 调度
@@ -65,6 +65,10 @@ PORT=8789
 # 模型配置
 MODEL_PROVIDER=zhipuai   # zhipuai / openai / deepseek
 MODEL_NAME=glm-4-flash
+
+# Gradio WebUI
+GRADIO_ENABLED=true
+GRADIO_PORT=7863
 
 # 飞书
 FEISHU_APP_ID=cli_xxx
@@ -134,6 +138,7 @@ agentica-daemon/
 │   │
 │   └── channels/            # 渠道实现
 │       ├── base.py          # 抽象基类
+│       ├── gr.py            # Gradio WebUI
 │       ├── feishu.py        # 飞书
 │       ├── telegram.py      # Telegram
 │       └── discord.py       # Discord
@@ -157,7 +162,7 @@ agentica-daemon/
 | 语言 | Python | TypeScript |
 | Agent SDK | agentica | 自实现 |
 | Gateway | FastAPI + WebSocket | Express + WebSocket |
-| 渠道 | 飞书/Telegram/Discord | Telegram/Discord/Slack |
+| 渠道 | Gradio/飞书/Telegram/Discord | Telegram/Discord/Slack |
 | 消息路由 | ✅ | ✅ |
 | 流式输出 | ✅ | ✅ |
 | 定时任务 | APScheduler | node-cron |
