@@ -104,6 +104,9 @@ class GradioChannel(Channel):
             name = session_name if session_name else "default"
             return f"agent:main:gradio:{name}"
 
+        # Gradio 默认使用固定 user_id
+        default_user_id = "gradio_user"
+
         # 构建界面
         with gr.Blocks(
             title="Agentica",
@@ -173,6 +176,11 @@ class GradioChannel(Channel):
                 history = history + [{"role": "assistant", "content": ""}]
 
                 session_id = get_session_id(session)
+                # 提取 session 短名用于日志
+                session_short = session if session else "default"
+                
+                # 记录用户输入日志
+                logger.info(f"[gradio] {session_short}: {user_msg}")
 
                 # 动态获取 agent_service
                 agent_service = channel._agent_service
@@ -196,6 +204,7 @@ class GradioChannel(Channel):
                         await agent_service.chat_stream(
                             message=user_msg,
                             session_id=session_id,
+                            user_id=default_user_id,
                             on_content=on_content,
                         )
                     except Exception as e:

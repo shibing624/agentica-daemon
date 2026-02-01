@@ -1,18 +1,19 @@
 """Agent 服务 - 封装 agentica SDK
 
 提供功能完善的 DeepAgent 服务，包括：
-- Workspace 支持（上下文和记忆）
-- 会话历史管理
+- Workspace 配置层（静态配置 + 持久记忆）
+- 会话历史管理（按 session_id 隔离）
 - 工具调用显示
 - 调度器工具集成（定时任务）
 """
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Callable, List, Any, Dict
+from typing import Optional, Callable, List, Any
 
 from loguru import logger
 
 from agentica import DeepAgent
+from agentica.db import SqliteDb
 from agentica.workspace import Workspace
 
 from ..config import settings
@@ -26,6 +27,7 @@ class ChatResult:
     content: str
     tool_calls: int = 0
     session_id: str = ""
+    user_id: str = ""
     tools_used: List[str] = field(default_factory=list)
     reasoning: str = ""
 
@@ -33,11 +35,26 @@ class ChatResult:
 class AgentService:
     """Agent 服务
 
-    封装 agentica SDK，提供统一的 Agent 调用接口，具有以下特性：
-    - 完整的 DeepAgent 功能
-    - Workspace 工作空间支持
-    - 对话历史记忆
+    封装 agentica SDK，提供统一的 Agent 调用接口：
+    - Workspace 配置层（AGENT.md, PERSONA.md, MEMORY.md 等）
+    - 会话历史管理（数据库存储，按 session_id 隔离）
+    - 多用户支持（按 user_id 隔离 Workspace 记忆）
     - 调度器工具集成
+    
+    架构设计：
+    ┌─────────────────────────────────────────────────────┐
+    │                    Agent                            │
+    ├─────────────────────────────────────────────────────┤
+    │  Workspace (配置层 - 按 user_id 隔离)                │
+    │  ├── AGENT.md, PERSONA.md, TOOLS.md → 全局共享      │
+    │  └── users/{user_id}/                              │
+    │      ├── USER.md                    → 用户配置      │
+    │      ├── MEMORY.md                  → 长期记忆      │
+    │      └── memory/                    → 日记忆        │
+    ├─────────────────────────────────────────────────────┤
+    │  SqliteDb (运行时层 - 按 session_id 隔离)            │
+    │  └── 会话历史 (messages, runs)                      │
+    └─────────────────────────────────────────────────────┘
     """
 
     def __init__(
@@ -66,10 +83,8 @@ class AgentService:
         # 延迟初始化
         self._agent: Optional[DeepAgent] = None
         self._workspace: Optional[Workspace] = None
+        self._db: Optional[SqliteDb] = None
         self._initialized = False
-
-        # 会话管理
-        self._sessions: Dict[str, Any] = {}
 
     def _ensure_initialized(self):
         """确保已初始化"""
@@ -77,11 +92,16 @@ class AgentService:
             return
 
         try:
-            # 初始化工作空间
+            # 初始化工作空间（配置层，user_id 在调用时动态设置）
             self._workspace = Workspace(self.workspace_path)
             if not self._workspace.exists():
                 self._workspace.initialize()
                 logger.info(f"Workspace initialized at {self.workspace_path}")
+
+            # 初始化数据库（会话历史存储）
+            db_path = self.workspace_path.parent / "agent_sessions.db"
+            self._db = SqliteDb(db_file=str(db_path))
+            logger.info(f"Session database: {db_path}")
 
             # 创建模型
             model = self._create_model()
@@ -98,30 +118,32 @@ class AgentService:
             if scheduler_tools:
                 instructions.append(self._get_scheduler_instructions())
 
-            # 创建 DeepAgent
+            # 创建 DeepAgent（user_id 和 session_id 在调用时动态设置）
             self._agent = DeepAgent(
                 model=model,
-                # 工作空间配置
+                # 数据库配置（会话历史存储）
+                db=self._db,
+                # 工作空间配置（配置层）
                 workspace=self._workspace,
                 load_workspace_context=True,
                 load_workspace_memory=True,
                 memory_days=7,
                 # 历史记录配置
                 add_history_to_messages=True,
-                num_history_responses=20,
+                num_history_responses=10,
                 # 工具配置
                 tools=all_tools if all_tools else None,
                 show_tool_calls=True,
-                tool_call_limit=50,
+                tool_call_limit=20,
                 # 多轮对话
                 enable_multi_round=False,
                 max_rounds=10,
                 # 上下文管理
                 context_soft_limit=80000,
                 context_hard_limit=120000,
-                enable_context_overflow_handling=True,
+                enable_context_overflow_handling=False,
                 # 反思和防重复
-                enable_step_reflection=True,
+                enable_step_reflection=False,
                 reflection_frequency=3,
                 enable_repetition_detection=True,
                 max_same_tool_calls=3,
@@ -234,15 +256,15 @@ class AgentService:
     async def chat(
         self,
         message: str,
-        session_id: str = "default",
-        user_id: Optional[str] = None,
+        session_id: str,
+        user_id: str = "default",
     ) -> ChatResult:
         """处理聊天消息
 
         Args:
             message: 用户消息
-            session_id: 会话ID
-            user_id: 用户ID（用于定时任务等功能）
+            session_id: 会话ID（每个 channel 唯一，清空对话后生成新 uuid4）
+            user_id: 用户ID（用于 Workspace 记忆隔离）
 
         Returns:
             聊天结果
@@ -255,20 +277,19 @@ class AgentService:
                 content=f"[Mock] Received: {message}",
                 tool_calls=0,
                 session_id=session_id,
+                user_id=user_id,
             )
 
         try:
-            # 如果提供了 user_id，在消息中注入user_id到上下文
-            if user_id:
-                context_message = f"[User Context: user_id={user_id}]\n\n{message}"
-            else:
-                context_message = message
+            # 设置 user_id 和 session_id（动态切换）
+            self._agent.user_id = user_id
+            self._agent.session_id = session_id
+            # 同步到 Workspace
+            if self._workspace:
+                self._workspace.set_user(user_id)
 
             # 运行 Agent
-            response = await self._agent.arun(
-                context_message,
-                session_id=session_id,
-            )
+            response = await self._agent.arun(message)
 
             # 提取结果
             content = (response.content or "").strip()
@@ -287,6 +308,7 @@ class AgentService:
                 content=content,
                 tool_calls=tool_calls,
                 session_id=session_id,
+                user_id=user_id,
                 tools_used=tools_used,
             )
 
@@ -296,13 +318,14 @@ class AgentService:
                 content=f"Error: {e}",
                 tool_calls=0,
                 session_id=session_id,
+                user_id=user_id,
             )
 
     async def chat_stream(
         self,
         message: str,
-        session_id: str = "default",
-        user_id: Optional[str] = None,
+        session_id: str,
+        user_id: str = "default",
         on_content: Optional[Callable[[str], Any]] = None,
         on_tool_call: Optional[Callable[[str, dict], Any]] = None,
         on_thinking: Optional[Callable[[str], Any]] = None,
@@ -311,8 +334,8 @@ class AgentService:
 
         Args:
             message: 用户消息
-            session_id: 会话ID
-            user_id: 用户ID
+            session_id: 会话ID（每个 channel 唯一，uuid4）
+            user_id: 用户ID（用于 Workspace 记忆隔离）
             on_content: 内容回调
             on_tool_call: 工具调用回调
             on_thinking: 思考过程回调
@@ -331,14 +354,16 @@ class AgentService:
                 content=content,
                 tool_calls=0,
                 session_id=session_id,
+                user_id=user_id,
             )
 
         try:
-            # 如果提供了 user_id，在消息中注入上下文
-            if user_id:
-                context_message = f"[User Context: user_id={user_id}]\n\n{message}"
-            else:
-                context_message = message
+            # 设置 user_id 和 session_id（动态切换）
+            self._agent.user_id = user_id
+            self._agent.session_id = session_id
+            # 同步到 Workspace
+            if self._workspace:
+                self._workspace.set_user(user_id)
 
             # 流式运行
             full_content = ""
@@ -347,10 +372,7 @@ class AgentService:
             tool_calls = 0
             shown_tool_count = 0
 
-            async for chunk in self._agent.arun_stream(
-                context_message,
-                session_id=session_id,
-            ):
+            async for chunk in self._agent.arun_stream(message):
                 if chunk is None:
                     continue
 
@@ -395,6 +417,7 @@ class AgentService:
                 content=full_content.strip(),
                 tool_calls=tool_calls,
                 session_id=session_id,
+                user_id=user_id,
                 tools_used=tools_used,
                 reasoning=reasoning_content,
             )
@@ -405,30 +428,60 @@ class AgentService:
                 content=f"Error: {e}",
                 tool_calls=0,
                 session_id=session_id,
+                user_id=user_id,
             )
 
-    def save_memory(self, content: str, long_term: bool = False):
-        """保存记忆
+    def list_sessions(self) -> List[str]:
+        """列出所有会话"""
+        self._ensure_initialized()
+
+        if self._db:
+            return self._db.get_all_session_ids()
+        return []
+
+    def delete_session(self, session_id: str) -> bool:
+        """删除会话（清空对话后调用）"""
+        self._ensure_initialized()
+
+        if self._db:
+            self._db.delete_session(session_id=session_id)
+            return True
+        return False
+
+    def clear_session(self, session_id: str) -> bool:
+        """清除会话历史
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            是否成功
+        """
+        return self.delete_session(session_id)
+
+    def save_memory(self, content: str, user_id: str = "default", long_term: bool = False):
+        """保存记忆到 Workspace
 
         Args:
             content: 要保存的内容
-            long_term: 是否保存为长期记忆
+            user_id: 用户ID
+            long_term: 是否保存为长期记忆（MEMORY.md）
         """
         self._ensure_initialized()
 
         if self._workspace and self._workspace.exists():
+            self._workspace.set_user(user_id)
             if long_term:
-                # 保存到 MEMORY.md
                 self._workspace.write_memory(content)
             else:
-                # 保存到日记忆
                 self._workspace.write_memory(content, to_daily=True)
-            logger.debug(f"Memory saved: {content[:50]}...")
+            logger.debug(f"Memory saved for user {user_id}: {content[:50]}...")
 
-    def get_memory(self, days: int = 7) -> str:
+    def get_memory(self, user_id: str = "default", days: int = 7) -> str:
         """获取记忆
 
         Args:
+            user_id: 用户ID
             days: 获取最近多少天的记忆
 
         Returns:
@@ -437,48 +490,48 @@ class AgentService:
         self._ensure_initialized()
 
         if self._workspace and self._workspace.exists():
+            self._workspace.set_user(user_id)
             return self._workspace.get_memory_prompt(days=days) or ""
         return ""
 
-    def get_workspace_context(self) -> str:
+    def get_workspace_context(self, user_id: str = "default") -> str:
         """获取工作空间上下文
 
+        Args:
+            user_id: 用户ID
+
         Returns:
-            工作空间上下文内容
+            工作空间上下文内容（AGENT.md, PERSONA.md, USER.md 等）
         """
         self._ensure_initialized()
 
         if self._workspace and self._workspace.exists():
+            self._workspace.set_user(user_id)
             return self._workspace.get_context_prompt() or ""
         return ""
 
-    def list_sessions(self) -> List[str]:
-        """列出所有会话"""
-        sessions_dir = self.workspace_path.parent / "sessions"
-        if sessions_dir.exists():
-            return [f.stem for f in sessions_dir.glob("*.json")]
+    def list_users(self) -> List[str]:
+        """列出所有用户"""
+        self._ensure_initialized()
+
+        if self._workspace:
+            return self._workspace.list_users()
         return []
 
-    def delete_session(self, session_id: str) -> bool:
-        """删除会话"""
-        sessions_dir = self.workspace_path.parent / "sessions"
-        session_file = sessions_dir / f"{session_id}.json"
-        if session_file.exists():
-            session_file.unlink()
-            return True
-        return False
-
-    def clear_session(self, session_id: str) -> bool:
-        """清除会话历史（保留会话但清空对话）
+    def get_user_info(self, user_id: str) -> dict:
+        """获取用户信息
 
         Args:
-            session_id: 会话ID
+            user_id: 用户ID
 
         Returns:
-            是否成功
+            用户信息字典
         """
-        # 通过删除并重新创建来清除
-        return self.delete_session(session_id)
+        self._ensure_initialized()
+
+        if self._workspace:
+            return self._workspace.get_user_info(user_id=user_id)
+        return {"user_id": user_id}
 
     def add_tool(self, tool: Any) -> None:
         """动态添加工具
@@ -507,6 +560,12 @@ class AgentService:
         """获取工作空间实例"""
         self._ensure_initialized()
         return self._workspace
+
+    @property
+    def db(self) -> Optional[SqliteDb]:
+        """获取数据库实例"""
+        self._ensure_initialized()
+        return self._db
 
     @property
     def agent(self) -> Optional[DeepAgent]:

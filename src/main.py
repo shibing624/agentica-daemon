@@ -6,6 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from loguru import logger
+from uuid import uuid4
 
 from .config import settings
 from .services.agent_service import AgentService
@@ -24,6 +25,9 @@ agent_service: Optional[AgentService] = None
 channel_manager: Optional[ChannelManager] = None
 message_router: Optional[MessageRouter] = None
 scheduler: Optional[SchedulerService] = None
+
+# 默认 user_id（单用户场景）
+DEFAULT_USER_ID = "default"
 
 
 # ============== Agent Runner for Scheduler ==============
@@ -49,8 +53,8 @@ class DaemonAgentRunner:
             Agent response content
         """
         context = context or {}
-        job_id = context.get('job_id', 'default')
-        user_id = context.get('user_id', '')
+        job_id = context.get('job_id', str(uuid4()))
+        user_id = context.get('user_id', DEFAULT_USER_ID)
         session_id = f"scheduled_{job_id}"
 
         result = await self.agent_service.chat(
@@ -58,7 +62,6 @@ class DaemonAgentRunner:
             session_id=session_id,
             user_id=user_id,
         )
-
         return result.content
 
 
@@ -144,6 +147,7 @@ class ChatRequest(BaseModel):
     """聊天请求"""
     message: str
     session_id: str = "default"
+    user_id: str = "default"
     agent_id: str = "main"
 
 
@@ -151,12 +155,14 @@ class ChatResponse(BaseModel):
     """聊天响应"""
     content: str
     session_id: str
+    user_id: str = "default"
     tool_calls: int = 0
 
 
 class MemoryRequest(BaseModel):
     """记忆保存请求"""
     content: str
+    user_id: str = "default"
     long_term: bool = False
 
 
@@ -237,11 +243,13 @@ async def chat(request: ChatRequest):
     result = await agent_service.chat(
         message=request.message,
         session_id=request.session_id,
+        user_id=request.user_id,
     )
 
     return ChatResponse(
         content=result.content,
-        session_id=request.session_id,
+        session_id=result.session_id,
+        user_id=result.user_id,
         tool_calls=result.tool_calls,
     )
 
@@ -252,8 +260,8 @@ async def save_memory(request: MemoryRequest):
     if not agent_service:
         raise HTTPException(status_code=503, detail="Service not ready")
 
-    agent_service.save_memory(request.content, long_term=request.long_term)
-    return {"status": "saved"}
+    agent_service.save_memory(request.content, user_id=request.user_id, long_term=request.long_term)
+    return {"status": "saved", "user_id": request.user_id}
 
 
 @app.get("/api/sessions")
@@ -631,23 +639,27 @@ async def handle_ws_message(ws: WebSocket, client_id: str, message: dict):
             # 流式 Agent
             text = params.get("message", "")
             session_id = params.get("sessionId", "default")
+            user_id = params.get("userId", DEFAULT_USER_ID)
 
             async def on_content(delta: str):
                 await ws_manager.send_event(client_id, "agent.content", {
                     "delta": delta,
                     "sessionId": session_id,
+                    "userId": user_id,
                 })
 
             if agent_service:
                 chat_result = await agent_service.chat_stream(
                     message=text,
                     session_id=session_id,
+                    user_id=user_id,
                     on_content=on_content,
                 )
                 result = {
                     "content": chat_result.content,
                     "toolCalls": chat_result.tool_calls,
-                    "sessionId": session_id,
+                    "sessionId": chat_result.session_id,
+                    "userId": chat_result.user_id,
                 }
             else:
                 result = {"error": "Agent service not ready"}
@@ -771,11 +783,14 @@ async def handle_channel_message(message):
     # 路由到 Agent
     agent_id = message_router.route(message)
     session_id = message_router.get_session_id(message, agent_id)
+    # 使用 sender_id 作为 user_id（渠道用户标识）
+    user_id = message.sender_id or DEFAULT_USER_ID
 
     try:
         result = await agent_service.chat(
             message=message.content,
             session_id=session_id,
+            user_id=user_id,
         )
 
         # 回复
@@ -790,6 +805,7 @@ async def handle_channel_message(message):
         await ws_manager.broadcast("channel.message", {
             "channel": message.channel.value,
             "sender": message.sender_id,
+            "userId": user_id,
             "content": message.content[:100],
             "response": result.content[:100] if result.content else "",
         })

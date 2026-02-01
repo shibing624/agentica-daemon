@@ -65,12 +65,10 @@ class Settings:
 
             # 路径
             workspace_path=Path(os.getenv(
-                "WORKSPACE_PATH",
-                str(Path.home() / ".agentica" / "workspace")
+                "WORKSPACE_PATH", str(Path.home() / ".agentica" / "workspace")
             )),
             data_dir=Path(os.getenv(
-                "DATA_DIR",
-                str(Path.home() / ".agentica")
+                "DATA_DIR", str(Path.home() / ".agentica")
             )),
 
             # 模型

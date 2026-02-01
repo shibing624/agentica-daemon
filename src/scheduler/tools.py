@@ -2,8 +2,11 @@
 
 These tools are designed to be used by an AI agent to handle natural language
 requests for scheduled tasks.
+
+Note: agentica tool functions MUST return str, not dict.
 """
-from typing import Any, Optional, List
+import json
+from typing import Optional, List
 
 from .models import JobCreate
 from .types import (
@@ -15,6 +18,11 @@ from .types import (
 from .schedule import schedule_to_human
 from .task_parser import TaskParser
 from .service import SchedulerService
+
+
+def _to_json(data: dict) -> str:
+    """Convert dict to JSON string for tool return value."""
+    return json.dumps(data, ensure_ascii=False, indent=2)
 
 
 # Singleton instances (initialized by daemon)
@@ -193,31 +201,42 @@ CREATE_TASK_CHAIN_TOOL = {
 
 
 # ============== Tool Implementations ==============
+# Note: All tool functions MUST return str (not dict) for agentica compatibility.
 
 async def create_scheduled_job_tool(
     task_description: str,
     user_id: str,
-    notify_channel: str = "telegram",
-    notify_chat_id: str = "",
-    timezone: str = "Asia/Shanghai",
-) -> dict[str, Any]:
-    """Tool implementation: Create a scheduled job from natural language.
+    notify_channel: Optional[str] = None,
+    notify_chat_id: Optional[str] = None,
+    timezone: Optional[str] = None,
+) -> str:
+    """创建一个新的定时任务。
+
+    用户可以用自然语言描述任务，例如：
+    - "每天早上9点提醒我看新闻"
+    - "每周一下午3点发送周报"
+    - "明天上午10点提醒我开会"
 
     Args:
-        task_description: Natural language task description
-        user_id: User ID
-        notify_channel: Notification channel
-        notify_chat_id: Target chat/channel ID
-        timezone: User timezone
+        task_description: 用户的自然语言任务描述，包含时间和要执行的动作
+        user_id: 用户ID
+        notify_channel: 通知渠道 (feishu/telegram/gradio)，默认 gradio
+        notify_chat_id: 通知的目标chat/channel ID
+        timezone: 用户时区，默认 Asia/Shanghai
 
     Returns:
-        Dict with job creation result
+        JSON string with job creation result
     """
+    # Handle None values with defaults
+    notify_channel = notify_channel or "gradio"
+    notify_chat_id = notify_chat_id or ""
+    timezone = timezone or "Asia/Shanghai"
+    
     if not _scheduler_service or not _task_parser:
-        return {
+        return _to_json({
             "success": False,
             "error": "Scheduler service not initialized"
-        }
+        })
 
     try:
         # Parse natural language
@@ -228,12 +247,12 @@ async def create_scheduled_job_tool(
 
         # Check parsing confidence
         if parsed.confidence < 0.5:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "无法理解任务时间，请更明确地描述。",
                 "confidence": parsed.confidence,
                 "parsed_action": parsed.parsed_action,
-            }
+            })
 
         # Determine schedule type
         if parsed.cron_expression:
@@ -246,10 +265,10 @@ async def create_scheduled_job_tool(
         elif parsed.run_at:
             schedule = AtSchedule.from_datetime(parsed.run_at)
         else:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "无法确定执行时间",
-            }
+            })
 
         # Create payload
         payload = AgentTurnPayload(
@@ -270,7 +289,7 @@ async def create_scheduled_job_tool(
         # Add to scheduler
         job = await _scheduler_service.add(job_create)
 
-        return {
+        return _to_json({
             "success": True,
             "job": {
                 "id": job.id,
@@ -280,35 +299,39 @@ async def create_scheduled_job_tool(
                 "status": job.status.value,
             },
             "message": f"已创建定时任务：{job.name}，{schedule_to_human(job.schedule)}"
-        }
+        })
 
     except Exception as e:
-        return {
+        return _to_json({
             "success": False,
             "error": str(e)
-        }
+        })
 
 
 async def list_scheduled_jobs_tool(
     user_id: str,
-    include_disabled: bool = False,
-    limit: int = 20,
-) -> dict[str, Any]:
-    """Tool implementation: List user's scheduled jobs.
+    include_disabled: Optional[bool] = None,
+    limit: Optional[int] = None,
+) -> str:
+    """列出用户的所有定时任务。
 
     Args:
-        user_id: User ID
-        include_disabled: Include disabled/paused jobs
-        limit: Max number of jobs to return
+        user_id: 用户ID
+        include_disabled: 是否包含已暂停的任务，默认 False
+        limit: 返回数量限制，默认 20
 
     Returns:
-        Dict with jobs list
+        JSON string with jobs list
     """
+    # Handle None values with defaults
+    include_disabled = include_disabled if include_disabled is not None else False
+    limit = limit if limit is not None else 20
+    
     if not _scheduler_service:
-        return {
+        return _to_json({
             "success": False,
             "error": "Scheduler service not initialized"
-        }
+        })
 
     try:
         jobs = await _scheduler_service.list(
@@ -329,186 +352,186 @@ async def list_scheduled_jobs_tool(
                 "last_run_at_ms": job.state.last_run_at_ms,
             })
 
-        return {
+        return _to_json({
             "success": True,
             "jobs": job_list,
             "total": len(job_list),
-        }
+        })
 
     except Exception as e:
-        return {
+        return _to_json({
             "success": False,
             "error": str(e)
-        }
+        })
 
 
 async def delete_scheduled_job_tool(
     job_id: str,
     user_id: str,
-) -> dict[str, Any]:
-    """Tool implementation: Delete a scheduled job.
+) -> str:
+    """删除一个定时任务。
 
     Args:
-        job_id: Job ID to delete
-        user_id: User ID for permission check
+        job_id: 要删除的任务ID
+        user_id: 用户ID（用于权限验证）
 
     Returns:
-        Dict with deletion result
+        JSON string with deletion result
     """
     if not _scheduler_service:
-        return {
+        return _to_json({
             "success": False,
             "error": "Scheduler service not initialized"
-        }
+        })
 
     try:
         # Get job first to check ownership
         job = await _scheduler_service.get(job_id)
 
         if not job:
-            return {
+            return _to_json({
                 "success": False,
                 "error": f"找不到任务 {job_id}"
-            }
+            })
 
         if job.user_id != user_id:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "无权删除此任务"
-            }
+            })
 
         # Delete the job
         result = await _scheduler_service.remove(job_id)
 
         if result.removed:
-            return {
+            return _to_json({
                 "success": True,
                 "message": f"已删除任务：{job.name}"
-            }
+            })
         else:
-            return {
+            return _to_json({
                 "success": False,
                 "error": result.reason or "删除失败"
-            }
+            })
 
     except Exception as e:
-        return {
+        return _to_json({
             "success": False,
             "error": str(e)
-        }
+        })
 
 
 async def pause_scheduled_job_tool(
     job_id: str,
     user_id: str,
-) -> dict[str, Any]:
-    """Tool implementation: Pause a scheduled job.
+) -> str:
+    """暂停一个定时任务。暂停后任务不会执行，但可以恢复。
 
     Args:
-        job_id: Job ID to pause
-        user_id: User ID for permission check
+        job_id: 要暂停的任务ID
+        user_id: 用户ID（用于权限验证）
 
     Returns:
-        Dict with pause result
+        JSON string with pause result
     """
     if not _scheduler_service:
-        return {
+        return _to_json({
             "success": False,
             "error": "Scheduler service not initialized"
-        }
+        })
 
     try:
         # Get job first to check ownership
         job = await _scheduler_service.get(job_id)
 
         if not job:
-            return {
+            return _to_json({
                 "success": False,
                 "error": f"找不到任务 {job_id}"
-            }
+            })
 
         if job.user_id != user_id:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "无权暂停此任务"
-            }
+            })
 
         # Pause the job
         updated_job = await _scheduler_service.pause(job_id)
 
         if updated_job:
-            return {
+            return _to_json({
                 "success": True,
                 "message": f"已暂停任务：{job.name}"
-            }
+            })
         else:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "暂停失败"
-            }
+            })
 
     except Exception as e:
-        return {
+        return _to_json({
             "success": False,
             "error": str(e)
-        }
+        })
 
 
 async def resume_scheduled_job_tool(
     job_id: str,
     user_id: str,
-) -> dict[str, Any]:
-    """Tool implementation: Resume a paused job.
+) -> str:
+    """恢复一个已暂停的定时任务。
 
     Args:
-        job_id: Job ID to resume
-        user_id: User ID for permission check
+        job_id: 要恢复的任务ID
+        user_id: 用户ID（用于权限验证）
 
     Returns:
-        Dict with resume result
+        JSON string with resume result
     """
     if not _scheduler_service:
-        return {
+        return _to_json({
             "success": False,
             "error": "Scheduler service not initialized"
-        }
+        })
 
     try:
         # Get job first to check ownership
         job = await _scheduler_service.get(job_id)
 
         if not job:
-            return {
+            return _to_json({
                 "success": False,
                 "error": f"找不到任务 {job_id}"
-            }
+            })
 
         if job.user_id != user_id:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "无权恢复此任务"
-            }
+            })
 
         # Resume the job
         updated_job = await _scheduler_service.resume(job_id)
 
         if updated_job:
-            return {
+            return _to_json({
                 "success": True,
                 "message": f"已恢复任务：{job.name}",
                 "next_run_at_ms": updated_job.state.next_run_at_ms,
-            }
+            })
         else:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "恢复失败"
-            }
+            })
 
     except Exception as e:
-        return {
+        return _to_json({
             "success": False,
             "error": str(e)
-        }
+        })
 
 
 async def create_task_chain_tool(
@@ -516,52 +539,52 @@ async def create_task_chain_tool(
     target_job_id: str,
     user_id: str,
     on_status: Optional[List[str]] = None,
-) -> dict[str, Any]:
-    """Tool implementation: Create a task chain.
+) -> str:
+    """创建任务链，让一个任务完成后自动触发另一个任务。
 
     Args:
-        source_job_id: Source job ID
-        target_job_id: Target job ID to trigger
-        user_id: User ID for permission check
-        on_status: Trigger conditions
+        source_job_id: 源任务ID（完成后触发下一个任务）
+        target_job_id: 目标任务ID（被触发的任务）
+        user_id: 用户ID（用于权限验证）
+        on_status: 触发条件，任务在什么状态下触发（默认成功时触发）
 
     Returns:
-        Dict with chain creation result
+        JSON string with chain creation result
     """
     if not _scheduler_service:
-        return {
+        return _to_json({
             "success": False,
             "error": "Scheduler service not initialized"
-        }
+        })
 
     try:
         # Verify source job ownership
         source_job = await _scheduler_service.get(source_job_id)
         if not source_job:
-            return {
+            return _to_json({
                 "success": False,
                 "error": f"找不到源任务 {source_job_id}"
-            }
+            })
 
         if source_job.user_id != user_id:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "无权修改此任务"
-            }
+            })
 
         # Verify target job exists and belongs to same user
         target_job = await _scheduler_service.get(target_job_id)
         if not target_job:
-            return {
+            return _to_json({
                 "success": False,
                 "error": f"找不到目标任务 {target_job_id}"
-            }
+            })
 
         if target_job.user_id != user_id:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "目标任务不属于当前用户"
-            }
+            })
 
         # Create the chain
         updated_job = await _scheduler_service.chain(
@@ -571,21 +594,21 @@ async def create_task_chain_tool(
         )
 
         if updated_job:
-            return {
+            return _to_json({
                 "success": True,
                 "message": f"已创建任务链：{source_job.name} -> {target_job.name}",
-            }
+            })
         else:
-            return {
+            return _to_json({
                 "success": False,
                 "error": "创建任务链失败"
-            }
+            })
 
     except Exception as e:
-        return {
+        return _to_json({
             "success": False,
             "error": str(e)
-        }
+        })
 
 
 # Export all tools as a list for easy registration
