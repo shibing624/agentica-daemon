@@ -10,7 +10,6 @@ This example demonstrates:
 """
 import asyncio
 from pathlib import Path
-from datetime import datetime, timedelta
 from typing import Any
 
 from loguru import logger
@@ -25,13 +24,12 @@ from src.scheduler import (
     TOOL_IMPLEMENTATIONS,
     schedule_to_human,
 )
-from src.scheduler.executor import JobExecutor, SimpleAgentRunner, MultiChannelNotificationSender
+from src.scheduler.executor import JobExecutor
 from src.scheduler.models import JobCreate
 from src.scheduler.types import (
     SessionTarget,
     SessionTargetKind,
     CronSchedule,
-    AtSchedule,
     EverySchedule,
     AgentTurnPayload,
     SystemEventPayload,
@@ -39,38 +37,73 @@ from src.scheduler.types import (
 )
 
 
+# ============== Agent Runner (使用 gpt-4o) ==============
+
+class OpenAIAgentRunner:
+    """Agent runner using OpenAI gpt-4o."""
+
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+    async def run(
+        self,
+        prompt: str,
+        context: dict[str, Any] | None = None,
+    ) -> str:
+        """Run agent with prompt using gpt-4o."""
+        if not self.api_key:
+            # Mock response when no API key
+            return f"[Mock] Executed: {prompt}"
+
+        import openai
+        client = openai.AsyncOpenAI(api_key=self.api_key)
+
+        system_msg = "You are a helpful assistant executing scheduled tasks."
+        if context:
+            system_msg += f"\nContext: {context}"
+
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        return response.choices[0].message.content or ""
+
+
+# ============== Notification Sender ==============
+
+class LogNotificationSender:
+    """Simple notification sender that logs messages."""
+
+    async def send(
+        self,
+        channel: str,
+        chat_id: str,
+        message: str,
+    ) -> bool:
+        """Log notification (replace with real implementation)."""
+        logger.info(f"[Notification] {channel}:{chat_id} -> {message[:100]}")
+        return True
+
+
 # ============== Dependency Injection Callbacks ==============
-# These callbacks integrate with your main application's session system
 
 async def on_system_event(user_id: str, event_data: dict[str, Any]) -> None:
-    """Inject system event into user's main session.
-    
-    In a real application, this would:
-    - Find user's active session
-    - Add event to session's systemEvent queue
-    - Notify session of new event
-    """
+    """Inject system event into user's main session."""
     logger.info(f"[Main Mode] Injecting event for user {user_id}: {event_data.get('job_name')}")
-    # Real implementation: session_manager.inject_event(user_id, event_data)
 
 
 async def run_heartbeat(user_id: str) -> None:
-    """Trigger heartbeat in user's main session.
-    
-    This causes the agent to wake up and process the injected event.
-    """
+    """Trigger heartbeat in user's main session."""
     logger.info(f"[Main Mode] Triggering heartbeat for user {user_id}")
-    # Real implementation: session_manager.trigger_heartbeat(user_id)
 
 
 async def report_to_main(user_id: str, job_id: str, result: str) -> None:
-    """Report isolated execution result to main session.
-    
-    This allows the main session to know about background task completion.
-    """
+    """Report isolated execution result to main session."""
     logger.info(f"[Isolated Mode] Reporting result for user {user_id}, job {job_id}")
     logger.info(f"  Result: {result[:100]}...")
-    # Real implementation: session_manager.add_notification(user_id, job_id, result)
 
 
 # ============== Main Demo ==============
@@ -121,13 +154,9 @@ async def main():
     # ============== Demo 4: Full Scheduler Integration ==============
     logger.info("\n--- 完整调度器示例 ---")
 
-    # Initialize executor
-    agent_runner = SimpleAgentRunner(llm_client=None)
-    notification_sender = MultiChannelNotificationSender(
-        telegram_bot=None,
-        discord_client=None,
-        slack_client=None,
-    )
+    # Initialize executor with gpt-4o agent runner
+    agent_runner = OpenAIAgentRunner()
+    notification_sender = LogNotificationSender()
     
     executor = JobExecutor(
         agent_runner=agent_runner,
@@ -138,8 +167,8 @@ async def main():
     )
 
     # Initialize scheduler service
-    db_path = Path("~/.agentica/demo_scheduler.db").expanduser()
-    json_path = Path("~/.agentica/demo_tasks.json").expanduser()
+    db_path = Path("/tmp/demo_scheduler.db").expanduser()
+    json_path = Path("/tmp/demo_tasks.json").expanduser()
     
     scheduler = SchedulerService(
         db_path=db_path,

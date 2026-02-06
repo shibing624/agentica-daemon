@@ -15,7 +15,6 @@ from .services.router import MessageRouter
 from .scheduler import (
     SchedulerService,
     JobExecutor,
-    TaskParser,
     init_scheduler_tools,
     AgentTurnPayload,
 )
@@ -98,8 +97,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     )
 
     # 初始化调度器工具
-    task_parser = TaskParser()
-    init_scheduler_tools(scheduler, task_parser)
+    init_scheduler_tools(scheduler)
 
     # 注册渠道
     await setup_channels()
@@ -175,11 +173,15 @@ class SendRequest(BaseModel):
 
 class JobCreateRequest(BaseModel):
     """创建任务请求"""
-    task_description: str
+    name: str
+    prompt: str
     user_id: str
-    notify_channel: str = "telegram"
-    notify_chat_id: str = ""
+    cron_expression: Optional[str] = None
+    interval_seconds: Optional[int] = None
+    run_at_iso: Optional[str] = None
     timezone: str = "Asia/Shanghai"
+    notify_channel: str = "feishu"
+    notify_chat_id: str = ""
 
 
 class JobResponse(BaseModel):
@@ -395,22 +397,26 @@ async def get_job(job_id: str):
 
 @app.post("/api/scheduler/jobs")
 async def create_job(request: JobCreateRequest):
-    """创建定时任务（通过自然语言）"""
+    """创建定时任务"""
     if not scheduler:
         raise HTTPException(status_code=503, detail="Service not ready")
 
-    from .scheduler import (
-        create_scheduled_job_tool,
-    )
+    from .scheduler import create_scheduled_job_tool
+    import json
 
-    result = await create_scheduled_job_tool(
-        task_description=request.task_description,
+    result_str = await create_scheduled_job_tool(
+        name=request.name,
+        prompt=request.prompt,
         user_id=request.user_id,
+        cron_expression=request.cron_expression,
+        interval_seconds=request.interval_seconds,
+        run_at_iso=request.run_at_iso,
+        timezone=request.timezone,
         notify_channel=request.notify_channel,
         notify_chat_id=request.notify_chat_id,
-        timezone=request.timezone,
     )
 
+    result = json.loads(result_str)
     if not result.get("success"):
         raise HTTPException(
             status_code=400,
