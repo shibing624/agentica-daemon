@@ -87,7 +87,7 @@ DISCORD_BOT_TOKEN=xxx
 ### 开发模式
 
 ```bash
-uvicorn src.main:app --reload --port 8789
+python -m uvicorn src.main:app --reload --reload-dir src --port 8789
 ```
 
 ### 生产模式
