@@ -46,10 +46,6 @@ from .models import (
     JobState,
     JobCreate,
     JobPatch,
-    # Legacy compatibility
-    ScheduledTask,
-    TaskStatus,
-    TaskType,
 )
 
 # Schedule utilities
@@ -121,9 +117,6 @@ __all__ = [
     "JobState",
     "JobCreate",
     "JobPatch",
-    "ScheduledTask",
-    "TaskStatus",
-    "TaskType",
     # Schedule utilities
     "compute_next_run_at_ms",
     "schedule_to_human",

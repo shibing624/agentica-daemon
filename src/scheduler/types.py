@@ -203,8 +203,6 @@ class AgentTurnPayload:
     prompt: str = ""
     agent_id: str = "main"
     context: dict[str, Any] = field(default_factory=dict)
-    notify_channel: str = "telegram"
-    notify_chat_id: str = ""
     timeout_seconds: int = 300
 
     def to_dict(self) -> dict[str, Any]:
@@ -213,8 +211,6 @@ class AgentTurnPayload:
             "prompt": self.prompt,
             "agent_id": self.agent_id,
             "context": self.context,
-            "notify_channel": self.notify_channel,
-            "notify_chat_id": self.notify_chat_id,
             "timeout_seconds": self.timeout_seconds,
         }
 
@@ -224,8 +220,6 @@ class AgentTurnPayload:
             prompt=data.get("prompt", ""),
             agent_id=data.get("agent_id", "main"),
             context=data.get("context", {}),
-            notify_channel=data.get("notify_channel", "telegram"),
-            notify_chat_id=data.get("notify_chat_id", ""),
             timeout_seconds=data.get("timeout_seconds", 300),
         )
 
