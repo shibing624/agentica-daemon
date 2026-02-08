@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 
 @dataclass
@@ -21,19 +21,16 @@ class Settings:
     # 默认用户ID（单用户场景）
     default_user_id: str = "default"
 
-    # 工作空间
+    # 工作空间（agent 数据/配置存储）
     workspace_path: Path = field(default_factory=lambda: Path.home() / ".agentica" / "workspace")
     data_dir: Path = field(default_factory=lambda: Path.home() / ".agentica" / "data")
+    # Agent 工作目录（shell 命令执行的 cwd，默认用户 home）
+    base_dir: Path = field(default_factory=Path.home)
 
     # 模型配置
     model_provider: str = "zhipuai"
     model_name: str = "glm-4.7-flash"
-
-    # Gradio
-    gradio_enabled: bool = False
-    gradio_host: str = "0.0.0.0"
-    gradio_port: int = 7860
-    gradio_share: bool = False
+    model_thinking: str = ""  # 思考模式：enabled / disabled / auto，空则不启用
 
     # 飞书
     feishu_app_id: Optional[str] = None
@@ -73,16 +70,14 @@ class Settings:
             data_dir=Path(os.getenv(
                 "AGENTICA_DATA_DIR", str(Path.home() / ".agentica" / "data")
             )),
+            base_dir=Path(os.getenv(
+                "AGENTICA_BASE_DIR", str(Path.home())
+            )),
 
             # 模型
             model_provider=os.getenv("AGENTICA_MODEL_PROVIDER", "zhipuai"),
             model_name=os.getenv("AGENTICA_MODEL_NAME", "glm-4.7-flash"),
-
-            # Gradio
-            gradio_enabled=os.getenv("GRADIO_ENABLED", "").lower() in ("1", "true"),
-            gradio_host=os.getenv("GRADIO_HOST", "0.0.0.0"),
-            gradio_port=int(os.getenv("GRADIO_PORT", "7860")),
-            gradio_share=os.getenv("GRADIO_SHARE", "").lower() in ("1", "true"),
+            model_thinking=os.getenv("AGENTICA_MODEL_THINKING", ""),
 
             # 飞书
             feishu_app_id=os.getenv("FEISHU_APP_ID"),

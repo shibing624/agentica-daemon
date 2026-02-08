@@ -1,9 +1,15 @@
 """FastAPI 主入口"""
+import asyncio
+import json as json_mod
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+import shutil
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from loguru import logger
 from uuid import uuid4
@@ -12,11 +18,15 @@ from .config import settings
 from .services.agent_service import AgentService
 from .services.channel_manager import ChannelManager
 from .services.router import MessageRouter
+
+try:
+    from agentica.run_response import AgentCancelledError
+except ImportError:
+    AgentCancelledError = None
 from .scheduler import (
     SchedulerService,
     JobExecutor,
     init_scheduler_tools,
-    AgentTurnPayload,
 )
 
 # 全局服务实例
@@ -83,13 +93,12 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     channel_manager = ChannelManager()
     message_router = MessageRouter(default_agent="main")
 
-    # 初始化新的调度器（使用 JSON 文件存储，方便查看和修改）
-    json_path = settings.data_dir / "scheduler.json"
+    # 初始化调度器（YAML 配置 + SQLite 状态）
     agent_runner = GatewayAgentRunner(agent_service)
     executor = JobExecutor(agent_runner=agent_runner)
 
     scheduler = SchedulerService(
-        json_path=str(json_path),
+        data_dir=str(settings.data_dir),
         executor=executor,
     )
 
@@ -108,6 +117,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
 
     logger.info("Gateway started")
     logger.info(f"FastAPI docs: http://{settings.host}:{settings.port}/docs")
+    logger.info(f"Web UI: http://{settings.host}:{settings.port}/chat")
     logger.info(f"WebSocket: ws://{settings.host}:{settings.port}/ws")
 
     yield
@@ -210,6 +220,14 @@ async def root():
     }
 
 
+@app.get("/chat", response_class=HTMLResponse)
+async def web_chat():
+    """Web Chat 页面"""
+    html_path = Path(__file__).parent / "static" / "index.html"
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+
+
+@app.get("/health")
 @app.get("/api/health")
 async def health():
     """健康检查"""
@@ -220,6 +238,7 @@ async def health():
 
     return {
         "status": "ok",
+        "version": "0.1.1",
         "channels": channel_manager.get_status() if channel_manager else {},
         "scheduler": scheduler_status,
     }
@@ -235,10 +254,170 @@ async def status():
 
     return {
         "workspace": str(settings.workspace_path),
-        "model": f"{settings.model_provider}/{settings.model_name}",
+        "base_dir": str(settings.base_dir),
+        "model": f"{agent_service.model_provider}/{agent_service.model_name}" if agent_service else f"{settings.model_provider}/{settings.model_name}",
+        "model_provider": agent_service.model_provider if agent_service else settings.model_provider,
+        "model_name": agent_service.model_name if agent_service else settings.model_name,
+        "version": "0.1.1",
         "channels": channel_manager.get_status() if channel_manager else {},
         "scheduler": scheduler_status,
     }
+
+
+SUPPORTED_MODELS = {
+    "zhipuai": ["glm-4.7-flash", "glm-4-plus", "glm-4-long", "glm-4-flashx", "glm-4-flash", "glm-4-air", "glm-4-airx", "glm-4"],
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo", "o1", "o1-mini", "o3-mini"],
+    "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+    "moonshot": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    "yi": ["yi-lightning", "yi-large", "yi-medium", "yi-spark"],
+    "doubao": ["doubao-1.5-pro-32k", "doubao-pro-32k", "doubao-lite-32k"],
+    "azure": ["gpt-4o", "gpt-4-turbo", "gpt-35-turbo"],
+}
+
+
+@app.get("/api/models")
+async def list_models():
+    """列出支持的模型"""
+    current_provider = agent_service.model_provider if agent_service else settings.model_provider
+    current_name = agent_service.model_name if agent_service else settings.model_name
+    return {
+        "current_provider": current_provider,
+        "current_name": current_name,
+        "current": f"{current_provider}/{current_name}",
+        "providers": SUPPORTED_MODELS,
+    }
+
+
+class ModelSwitchRequest(BaseModel):
+    """模型切换请求"""
+    model_provider: str
+    model_name: str
+
+
+@app.post("/api/model")
+async def switch_model(request: ModelSwitchRequest):
+    """切换模型"""
+    if not agent_service:
+        raise HTTPException(status_code=503, detail="Service not ready")
+
+    agent_service.reload_model(request.model_provider, request.model_name)
+    settings.model_provider = request.model_provider
+    settings.model_name = request.model_name
+
+    return {
+        "status": "ok",
+        "model": f"{request.model_provider}/{request.model_name}",
+    }
+
+
+class BaseDirRequest(BaseModel):
+    """Working directory 修改请求"""
+    base_dir: str
+
+
+@app.post("/api/config/base_dir")
+async def set_base_dir(request: BaseDirRequest):
+    """修改 working directory"""
+    p = Path(request.base_dir).expanduser()
+    created = False
+    if not p.exists():
+        # Parent exists → auto-create the last-level dir; otherwise reject
+        if p.parent.exists():
+            p.mkdir(parents=False, exist_ok=True)
+            created = True
+        else:
+            raise HTTPException(status_code=400, detail="文件夹路径不存在，需要写一个存在的路径")
+    elif not p.is_dir():
+        raise HTTPException(status_code=400, detail="该路径不是文件夹")
+    settings.base_dir = p
+    _add_dir_history(str(p))
+    return {"status": "ok", "base_dir": str(p), "created": created}
+
+
+# ---- Dir history management ----
+_DIR_HISTORY_MAX = 20
+
+def _dir_history_file() -> Path:
+    return settings.data_dir / "dir_history.json"
+
+def _load_dir_history() -> list[str]:
+    f = _dir_history_file()
+    if f.exists():
+        try:
+            return json_mod.loads(f.read_text())
+        except Exception:
+            pass
+    return []
+
+def _save_dir_history(history: list[str]):
+    f = _dir_history_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json_mod.dumps(history, ensure_ascii=False))
+
+def _add_dir_history(path: str):
+    history = _load_dir_history()
+    if path in history:
+        history.remove(path)
+    history.insert(0, path)
+    history = history[:_DIR_HISTORY_MAX]
+    _save_dir_history(history)
+
+
+@app.get("/api/config/dir_history")
+async def get_dir_history():
+    """获取历史路径列表"""
+    history = _load_dir_history()
+    # Ensure current base_dir is in history
+    current = str(settings.base_dir)
+    if current not in history:
+        history.insert(0, current)
+        _save_dir_history(history)
+    return {"history": history}
+
+
+@app.delete("/api/config/dir_history")
+async def clear_dir_history():
+    """清空历史路径"""
+    _save_dir_history([str(settings.base_dir)])
+    return {"status": "ok"}
+
+
+class OpenRequest(BaseModel):
+    """打开路径请求"""
+    path: str
+    app: str = "finder"  # "finder" or "terminal"
+
+
+@app.post("/api/open")
+async def open_path(request: OpenRequest):
+    """在 Finder 或 Terminal 中打开指定路径"""
+    import subprocess
+    import sys
+
+    p = Path(request.path).expanduser()
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+
+    try:
+        if sys.platform == "darwin":
+            if request.app == "terminal":
+                subprocess.Popen(["open", "-a", "Terminal", str(p)])
+            else:
+                subprocess.Popen(["open", str(p)])
+        elif sys.platform == "linux":
+            if request.app == "terminal":
+                for term in ["gnome-terminal", "xterm", "konsole"]:
+                    if shutil.which(term):
+                        subprocess.Popen([term, f"--working-directory={str(p)}"])
+                        break
+            else:
+                subprocess.Popen(["xdg-open", str(p)])
+        else:
+            subprocess.Popen(["explorer", str(p)])
+
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -258,6 +437,94 @@ async def chat(request: ChatRequest):
         session_id=result.session_id,
         user_id=result.user_id,
         tool_calls=result.tool_calls,
+    )
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """SSE 流式聊天"""
+    if not agent_service:
+        raise HTTPException(status_code=503, detail="Service not ready")
+
+    async def event_generator():
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+        async def on_content(delta: str):
+            await queue.put({"event": "content", "data": delta})
+
+        async def on_tool_call(name: str, args: dict):
+            await queue.put({"event": "tool_call", "data": {"name": name, "args": args}})
+
+        async def on_tool_result(name: str, result: str):
+            await queue.put({"event": "tool_result", "data": {"name": name, "result": result}})
+
+        async def on_thinking(delta: str):
+            await queue.put({"event": "thinking", "data": delta})
+
+        async def run_agent():
+            try:
+                result = await agent_service.chat_stream(
+                    message=request.message,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    on_content=on_content,
+                    on_tool_call=on_tool_call,
+                    on_tool_result=on_tool_result,
+                    on_thinking=on_thinking,
+                )
+                # 发送完成事件（包含 token 使用量等元信息）
+                # metrics 来自 agentica，格式为 {key: [values...]}, 需要 sum
+                raw_metrics = result.metrics or {}
+                def _sum_metric(key):
+                    v = raw_metrics.get(key, 0)
+                    if isinstance(v, list):
+                        return sum(x for x in v if isinstance(x, (int, float)))
+                    return v if isinstance(v, (int, float)) else 0
+
+                await queue.put({"event": "done", "data": {
+                    "session_id": result.session_id,
+                    "tool_calls": result.tool_calls,
+                    "tools_used": result.tools_used,
+                    "input_tokens": _sum_metric("input_tokens"),
+                    "output_tokens": _sum_metric("output_tokens"),
+                    "total_tokens": _sum_metric("total_tokens"),
+                }})
+            except asyncio.CancelledError:
+                # 用户中止 — 不发 error 事件，直接结束
+                pass
+            except Exception as e:
+                # AgentCancelledError 也视为正常中止
+                if AgentCancelledError and isinstance(e, AgentCancelledError):
+                    pass
+                else:
+                    await queue.put({"event": "error", "data": str(e)})
+            finally:
+                await queue.put(None)  # sentinel
+
+        task = asyncio.create_task(run_agent())
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    yield "data: [DONE]\n\n"
+                    break
+                yield f"data: {json_mod.dumps(item, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            # 通知 agentica agent 立即停止当前运行
+            if agent_service and agent_service._agent:
+                agent_service._agent.cancel()
+            task.cancel()
+            raise
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -291,6 +558,20 @@ async def delete_session(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
 
     return {"status": "deleted"}
+
+
+@app.post("/api/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    target_dir: str = Form(""),
+):
+    """上传文件到 working directory"""
+    base = Path(target_dir) if target_dir else settings.workspace_path
+    base.mkdir(parents=True, exist_ok=True)
+    dest = base / file.filename
+    with open(dest, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return {"status": "ok", "path": str(dest), "filename": file.filename, "size": dest.stat().st_size}
 
 
 @app.get("/api/channels")
@@ -506,13 +787,6 @@ async def resume_job(job_id: str, user_id: str):
         "job_id": job_id,
         "next_run_at_ms": updated_job.state.next_run_at_ms,
     }
-
-
-# Legacy endpoint for backwards compatibility
-@app.get("/api/scheduler/tasks")
-async def list_tasks():
-    """列出定时任务（旧接口，已废弃）"""
-    return await list_jobs()
 
 
 # ============== Scheduler Monitoring API ==============
@@ -928,23 +1202,9 @@ async def feishu_webhook(request: dict):
 
 async def setup_channels():
     """设置渠道"""
-    from .channels.gr import GradioChannel
     from .channels.feishu import FeishuChannel
     from .channels.telegram import TelegramChannel
     from .channels.discord import DiscordChannel
-
-    # Gradio
-    if settings.gradio_enabled:
-        try:
-            gradio_channel = GradioChannel(
-                host=settings.gradio_host,
-                port=settings.gradio_port,
-                share=settings.gradio_share,
-            )
-            gradio_channel.set_agent_service(agent_service)
-            channel_manager.register(gradio_channel)
-        except Exception as e:
-            logger.error(f"Failed to create Gradio channel: {e}")
 
     # 飞书
     if settings.feishu_app_id and settings.feishu_app_secret:

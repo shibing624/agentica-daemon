@@ -148,10 +148,8 @@ async def main():
     )
 
     # Initialize scheduler service
-    json_path = Path("/tmp/demo_scheduler.json").expanduser()
-    
     scheduler = SchedulerService(
-        json_path=json_path,
+        data_dir="/tmp/demo_scheduler",
         executor=executor.execute,
         on_system_event=on_system_event,
         run_heartbeat=run_heartbeat,

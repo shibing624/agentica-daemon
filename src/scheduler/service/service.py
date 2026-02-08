@@ -4,13 +4,12 @@ This is the unified entry point for all scheduler operations.
 Supports:
 - Session target modes (main/isolated)
 - Dependency injection callbacks
-- JSON file storage for easy viewing and editing
+- YAML config + SQLite state storage
 """
 from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, List
 
@@ -19,7 +18,6 @@ from loguru import logger
 from ..models import ScheduledJob, JobCreate, JobPatch
 from ..types import (
     JobStatus,
-    RunStatus,
     RemoveResult,
     RunResult,
     SchedulerStatus,
@@ -27,10 +25,9 @@ from ..types import (
     JobRun,
     JobStats,
     BatchResult,
-    SessionTarget,
 )
 from .state import SchedulerServiceDeps, SchedulerServiceState
-from .json_store import JsonJobStore
+from .store import JobStore
 from .events import EventEmitter, emit_job_event, EventTypes
 from . import ops
 from . import timer
@@ -46,18 +43,13 @@ ReportToMainCallback = Callable[[str, str, str], Awaitable[None]]
 class SchedulerService:
     """Unified scheduler service for managing scheduled jobs.
 
-    This replaces both the legacy Scheduler class and the APScheduler-based
-    SchedulerService with a simpler asyncio-based implementation.
-    
-    Supports:
-    - Session target modes (main/isolated)
-    - Dependency injection for main mode callbacks
-    - JSON file storage for easy viewing and editing
+    Uses YAML config for job definitions (user-editable) and
+    SQLite for runtime state + run history (program-owned).
     """
 
     def __init__(
         self,
-        json_path: str | Path = "~/.agentica/data/scheduler.json",
+        data_dir: str | Path = "~/.agentica/data",
         executor: Any = None,
         # Dependency injection callbacks for main mode
         on_system_event: OnSystemEventCallback | None = None,
@@ -67,20 +59,20 @@ class SchedulerService:
         """Initialize scheduler service.
 
         Args:
-            json_path: Path to JSON file for storage
+            data_dir: Directory containing scheduler.yaml and scheduler_state.db
             executor: Job executor (implements execute(job) -> Any)
             on_system_event: Callback to inject system event into main session
             run_heartbeat: Callback to trigger heartbeat in main session
             report_to_main: Callback to report isolated execution result to main session
         """
-        json_path = Path(json_path).expanduser()
-        json_path.parent.mkdir(parents=True, exist_ok=True)
+        data_dir = Path(data_dir).expanduser()
+        data_dir.mkdir(parents=True, exist_ok=True)
 
-        self.store = JsonJobStore(json_path)
+        self.store = JobStore(data_dir)
         self.events = EventEmitter()
         self.deps = SchedulerServiceDeps(executor=executor)
         self.state = SchedulerServiceState()
-        
+
         # Main mode callbacks
         self.on_system_event = on_system_event
         self.run_heartbeat = run_heartbeat
@@ -586,40 +578,37 @@ class SchedulerService:
         """
         return await self.run(job_id, mode="force")
 
-    # ============== JSON Export ==============
+    # ============== YAML Config ==============
 
-    async def export_to_json(self) -> Path:
-        """Export all jobs to JSON file.
-
-        Returns:
-            Path to the JSON file
-        """
-        await self.store.export_to_json()
-        return await self.store.get_json_path()
-
-    async def import_from_json(self, json_path: str | Path | None = None) -> int:
-        """Import jobs from JSON file.
-
-        Args:
-            json_path: Path to JSON file, defaults to configured path
+    async def export_to_yaml(self) -> Path:
+        """Force write YAML config to disk.
 
         Returns:
-            Number of jobs imported
+            Path to the YAML file
         """
-        count = await self.store.import_from_json(json_path)
-        
-        # Re-arm timer after import
+        await self.store.export_to_yaml()
+        return await self.store.get_yaml_path()
+
+    async def reload_yaml(self) -> int:
+        """Reload jobs from YAML file (hot-reload).
+
+        Returns:
+            Number of jobs loaded
+        """
+        count = await self.store.reload_yaml()
+
+        # Re-arm timer after reload
         if self.state.running and count > 0:
             await self._activate_jobs()
             await timer.arm_timer(self)
-        
+
         return count
 
-    async def get_json_path(self) -> Path:
-        """Get the path to the JSON file.
+    async def get_yaml_path(self) -> Path:
+        """Get the path to the YAML config file.
 
         Returns:
-            Path to JSON file
+            Path to YAML file
         """
-        return await self.store.get_json_path()
+        return await self.store.get_yaml_path()
 

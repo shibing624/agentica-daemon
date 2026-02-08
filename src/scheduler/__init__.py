@@ -4,7 +4,7 @@ This module provides a unified scheduler system with:
 - Natural language task parsing
 - Multiple schedule types (at/every/cron)
 - Task chaining
-- JSON file persistence (easy to view and edit)
+- YAML config + SQLite state persistence
 - asyncio-based timer
 """
 # Core types

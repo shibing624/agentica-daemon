@@ -189,7 +189,7 @@ class JobExecutor:
             context=context,
         )
 
-        logger.info(f"Job {job.id} completed: {result[:100]}...")
+        logger.info(f"Job {job.id} completed, result length: {len(result)}")
         return result
 
     async def _execute_system_event(

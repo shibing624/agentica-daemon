@@ -6,13 +6,16 @@
 - 工具调用显示
 - 调度器工具集成（定时任务）
 """
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Callable, List, Any
+from typing import Optional, Callable, List, Any, Dict
 
 from loguru import logger
-
+import sys
+sys.path.append("/Users/xuming/Documents/Codes/agentica")
 from agentica import DeepAgent
+from agentica.run_response import AgentCancelledError
 from agentica.db import SqliteDb
 from agentica.workspace import Workspace
 
@@ -30,6 +33,7 @@ class ChatResult:
     user_id: str = ""
     tools_used: List[str] = field(default_factory=list)
     reasoning: str = ""
+    metrics: Optional[Dict[str, Any]] = None
 
 
 class AgentService:
@@ -133,7 +137,6 @@ class AgentService:
                 num_history_responses=4,
                 # 工具配置
                 tools=all_tools if all_tools else None,
-                show_tool_calls=True,
                 tool_call_limit=40,
                 # 指令
                 instructions=instructions if instructions else None,
@@ -158,7 +161,14 @@ class AgentService:
 
     def _create_model(self) -> Any:
         """创建模型实例"""
-        params = {"id": self.model_name, "timeout": 300}
+        params: dict[str, Any] = {"id": self.model_name, "timeout": 300}
+
+        # 构建 extra_body（思考模式等）
+        if settings.model_thinking and settings.model_thinking in ("enabled", "disabled", "auto"):
+            params["extra_body"] = {
+                "thinking": {"type": settings.model_thinking}
+            }
+            logger.info(f"Model thinking mode: {settings.model_thinking}")
 
         if self.model_provider == "zhipuai":
             from agentica import ZhipuAI
@@ -182,7 +192,6 @@ class AgentService:
             from agentica import AzureOpenAIChat
             return AzureOpenAIChat(**params)
         else:
-            # 默认使用 OpenAI 兼容接口
             from agentica import OpenAIChat
             return OpenAIChat(**params)
 
@@ -321,6 +330,7 @@ class AgentService:
         user_id: str = "default",
         on_content: Optional[Callable[[str], Any]] = None,
         on_tool_call: Optional[Callable[[str, dict], Any]] = None,
+        on_tool_result: Optional[Callable[[str, str], Any]] = None,
         on_thinking: Optional[Callable[[str], Any]] = None,
     ) -> ChatResult:
         """流式聊天
@@ -330,7 +340,8 @@ class AgentService:
             session_id: 会话ID（每个 channel 唯一，uuid4）
             user_id: 用户ID（用于 Workspace 记忆隔离）
             on_content: 内容回调
-            on_tool_call: 工具调用回调
+            on_tool_call: 工具调用回调 (name, args)
+            on_tool_result: 工具结果回调 (name, result)
             on_thinking: 思考过程回调
 
         Returns:
@@ -339,7 +350,6 @@ class AgentService:
         self._ensure_initialized()
 
         if not self._agent:
-            # Mock 模式
             content = f"[Mock] Received: {message}"
             if on_content:
                 await on_content(content)
@@ -351,39 +361,59 @@ class AgentService:
             )
 
         try:
-            # 设置 user_id 和 session_id（动态切换）
             self._agent.user_id = user_id
             self._agent.session_id = session_id
-            # 同步到 Workspace
             if self._workspace:
                 self._workspace.set_user(user_id)
 
-            # 流式运行
             full_content = ""
             reasoning_content = ""
             tools_used = []
             tool_calls = 0
-            shown_tool_count = 0
+            last_metrics = None
 
-            async for chunk in self._agent.arun_stream(message):
+            async for chunk in self._agent.arun_stream(message, stream_intermediate_steps=True):
                 if chunk is None:
                     continue
 
-                # 处理工具调用事件
+                if hasattr(chunk, 'metrics') and chunk.metrics:
+                    last_metrics = chunk.metrics
+
+                # 工具调用开始
                 if chunk.event == "ToolCallStarted":
-                    if chunk.tools and len(chunk.tools) > shown_tool_count:
-                        new_tools = chunk.tools[shown_tool_count:]
-                        for tool_info in new_tools:
-                            tool_name = tool_info.get("tool_name") or tool_info.get("name", "unknown")
-                            tool_args = tool_info.get("tool_args") or tool_info.get("arguments", {})
-                            tools_used.append(tool_name)
-                            tool_calls += 1
-                            if on_tool_call:
-                                await on_tool_call(tool_name, tool_args)
-                        shown_tool_count = len(chunk.tools)
+                    tool_info = chunk.tools[-1] if chunk.tools else None
+                    if tool_info:
+                        tool_name = tool_info.get("tool_name") or tool_info.get("name", "unknown")
+                        tool_args = tool_info.get("tool_args") or tool_info.get("arguments", {})
+                        # 截断过长的参数值
+                        display_args = {}
+                        for k, v in tool_args.items():
+                            if isinstance(v, str) and len(v) > 100:
+                                display_args[k] = v[:100] + "..."
+                            else:
+                                display_args[k] = v
+                        tools_used.append(tool_name)
+                        tool_calls += 1
+                        if on_tool_call:
+                            await on_tool_call(tool_name, display_args)
                     continue
 
+                # 工具调用完成 — 倒序遍历找到含 content 的 tool_info（参考 cli.py）
                 elif chunk.event == "ToolCallCompleted":
+                    if chunk.tools and on_tool_result:
+                        for tool_info in reversed(chunk.tools):
+                            if "content" in tool_info:
+                                t_name = tool_info.get("tool_name") or tool_info.get("name", "unknown")
+                                t_content = tool_info.get("content", "")
+                                is_error = tool_info.get("tool_call_error", False)
+                                if t_content:
+                                    result_str = str(t_content)[:500] + ("..." if len(str(t_content)) > 500 else "")
+                                else:
+                                    result_str = "(no output)"
+                                if is_error:
+                                    result_str = "❌ " + result_str
+                                await on_tool_result(t_name, result_str)
+                                break
                     continue
 
                 # 跳过其他中间事件
@@ -413,7 +443,13 @@ class AgentService:
                 user_id=user_id,
                 tools_used=tools_used,
                 reasoning=reasoning_content,
+                metrics=last_metrics,
             )
+
+        except (asyncio.CancelledError, AgentCancelledError, KeyboardInterrupt):
+            # 用户中止，直接透传，不吞异常
+            logger.info(f"AgentService stream cancelled, session={session_id}")
+            raise
 
         except Exception as e:
             logger.error(f"AgentService stream error: {e}")
@@ -525,6 +561,19 @@ class AgentService:
         if self._workspace:
             return self._workspace.get_user_info(user_id=user_id)
         return {"user_id": user_id}
+
+    def reload_model(self, model_provider: str, model_name: str) -> None:
+        """运行时切换模型
+
+        Args:
+            model_provider: 模型提供商
+            model_name: 模型名称
+        """
+        self.model_provider = model_provider
+        self.model_name = model_name
+        self._initialized = False
+        self._agent = None
+        logger.info(f"Model reloaded: {model_provider}/{model_name}")
 
     def add_tool(self, tool: Any) -> None:
         """动态添加工具

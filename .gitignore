@@ -208,3 +208,4 @@ __marimo__/
 update_tech*.md
 .codebuddy/
 CLAUDE.md
+uv.lock

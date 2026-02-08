@@ -7,7 +7,7 @@ from enum import Enum
 
 class ChannelType(Enum):
     """渠道类型"""
-    GRADIO = "gradio"
+    WEB = "web"
     FEISHU = "feishu"
     TELEGRAM = "telegram"
     DISCORD = "discord"

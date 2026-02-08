@@ -10,9 +10,7 @@ loguru>=0.7.0
 # Channels
 lark-oapi>=1.0.0        # Feishu
 apscheduler>=3.10.0     # Scheduler
-
-# WebUI
-gradio>=4.0.0
+pyyaml>=6.0             # YAML config
 
 # Optional: Telegram
 # python-telegram-bot>=20.0

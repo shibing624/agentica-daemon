@@ -3,6 +3,7 @@
 Handles scheduling wake-ups and running due jobs.
 """
 import asyncio
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -39,7 +40,8 @@ async def arm_timer(service: "SchedulerService") -> None:
         # Signal the timer loop to check for new wake time
         service.state.wake_event.set()
 
-        logger.debug(f"Timer armed for {next_run_ms}")
+        human_time = datetime.fromtimestamp(next_run_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        logger.debug(f"Timer armed for {human_time}")
 
 
 async def timer_loop(service: "SchedulerService") -> None:
