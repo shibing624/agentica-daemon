@@ -178,12 +178,46 @@ body{font-family:var(--sans);font-size:14px;line-height:1.6;color:var(--fg);back
 .sec-block.sec-tools .sec-toggle{background:rgba(74,144,217,.08);color:#4a90d9}
 [data-theme="dark"] .sec-block.sec-tools .sec-toggle{background:rgba(74,144,217,.12);color:#6bb0f0}
 .sec-block.sec-tools .sec-lbl{color:inherit}
+/* todo section — amber/warm accent */
+.sec-block.sec-todos .sec-toggle{background:rgba(217,159,50,.10);color:#b07d20}
+[data-theme="dark"] .sec-block.sec-todos .sec-toggle{background:rgba(217,159,50,.14);color:#e0a830}
+.sec-block.sec-todos .sec-lbl{color:inherit}
+.sec-block.sec-todos .todo-list{padding:4px 10px;background:rgba(217,159,50,.04);border-top:1px solid var(--border2)}
+[data-theme="dark"] .sec-block.sec-todos .todo-list{background:rgba(217,159,50,.06)}
+.sec-block.sec-todos .todo-row{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;line-height:1.4}
+.sec-block.sec-todos .todo-st{flex-shrink:0;font-size:13px}
+.sec-block.sec-todos .todo-txt{color:var(--fg);word-break:break-word}
+/* task section — purple accent */
+.sec-block.sec-task .sec-toggle{background:rgba(160,80,200,.08);color:#9050c0}
+[data-theme="dark"] .sec-block.sec-task .sec-toggle{background:rgba(160,80,200,.12);color:#c080e8}
+.sec-block.sec-task .sec-lbl{color:inherit}
+/* task subagent inner tool list */
+.task-inner{padding:4px 10px;background:rgba(160,80,200,.03);border-top:1px solid var(--border2)}
+[data-theme="dark"] .task-inner{background:rgba(160,80,200,.05)}
+.task-inner-row{display:flex;align-items:center;gap:5px;padding:2px 0;font-size:11px;line-height:1.3;font-family:var(--mono)}
+.task-inner-row .ti-icon{flex-shrink:0;font-size:12px}
+.task-inner-row .ti-name{font-weight:600;color:#9050c0;white-space:nowrap}
+[data-theme="dark"] .task-inner-row .ti-name{color:#c080e8}
+.task-inner-row .ti-info{color:var(--fg3);word-break:break-word}
+.task-inner-more{font-size:10px;color:var(--fg3);font-style:italic;padding:2px 0}
+.task-summary{font-size:10px;color:var(--fg3);font-style:italic;padding:3px 0 1px;border-top:1px solid var(--border2);margin-top:2px}
 .tool-item{padding:5px 12px;font-size:12px;display:flex;align-items:flex-start;gap:6px;border-bottom:1px solid var(--border2);background:var(--bg2)}
 .tool-item:last-child{border-bottom:none}
 .tool-item .t-icon{flex-shrink:0;font-size:13px;line-height:1.4}
 .tool-item .t-name{font-weight:600;color:#b060c0;font-family:var(--mono);font-size:12px;white-space:nowrap}
 [data-theme="dark"] .tool-item .t-name{color:#d49ce3}
 .tool-item .t-args{color:var(--fg3);font-size:11px;font-family:var(--mono);word-break:break-all;line-height:1.4}
+/* single tool inline in toggle */
+.sec-lbl.tool-inline{color:#b060c0;font-family:var(--mono)}
+[data-theme="dark"] .sec-lbl.tool-inline{color:#d49ce3}
+.sec-detail.tool-inline-args{opacity:1;font-size:11px;color:var(--fg2)}
+/* diff stats for file tools */
+.diff-add{color:#1a7f37;font-weight:600;font-family:var(--mono);font-size:11px}
+.diff-del{color:#cf222e;font-weight:600;font-family:var(--mono);font-size:11px}
+[data-theme="dark"] .diff-add{color:#3fb950}
+[data-theme="dark"] .diff-del{color:#f85149}
+.file-path{color:var(--fg2);font-family:var(--mono);font-size:11px}
+.line-range{color:var(--fg3);font-family:var(--mono);font-size:10px}
 .tool-result{padding:3px 12px 5px 30px;font-size:10px;color:var(--fg3);font-family:var(--mono);white-space:pre-wrap;word-break:break-all;max-height:80px;overflow-y:auto;background:var(--bg2);border-bottom:1px solid var(--border2);opacity:.7}
 .tool-result:last-child{border-bottom:none}
 
@@ -412,6 +446,15 @@ const TOOL_ICONS = {
   task:'🤖', save_memory:'💾', default:'🔧',
 };
 function toolIcon(name){return TOOL_ICONS[name]||TOOL_ICONS.default}
+// Display name mapping for tools
+const TOOL_DISPLAY={'write_todos':'todos','read_todos':'todos'};
+function toolDisplay(name){return TOOL_DISPLAY[name]||name}
+// Determine section CSS class based on tool type
+function toolSecClass(name){
+  if(name==='write_todos'||name==='read_todos') return 'sec-todos';
+  if(name==='task') return 'sec-task';
+  return 'sec-tools';
+}
 
 // Smart format tool args for display
 function fmtToolArgs(name, args){
@@ -419,16 +462,30 @@ function fmtToolArgs(name, args){
   try{
     switch(name){
       case 'read_file':{
-        const f=args.file||args.path||args.filename||'';
-        const parts=[f];
-        if(args.start_line!=null||args.end_line!=null){
+        const f=args.file_path||args.file||args.path||args.filename||'';
+        const short=shortenFilePath(f);
+        const parts=[short];
+        if(args.offset!=null||args.limit!=null){
+          const s=(args.offset||0)+1, e=args.limit?(args.offset||0)+args.limit:'';
+          parts.push(`(L${s}${e?'-'+e:''})`);
+        } else if(args.start_line!=null||args.end_line!=null){
           const s=args.start_line||1, e=args.end_line||'';
           parts.push(`(L${s}${e?'-'+e:''})`);
         }
         return parts.join(' ');
       }
-      case 'write_file':case 'edit_file':{
-        return args.file||args.path||args.filename||JSON.stringify(args).slice(0,150);
+      case 'write_file':{
+        const f=args.file_path||args.file||args.path||args.filename||'';
+        const short=shortenFilePath(f);
+        const lines=args._lines||0;
+        return short+(lines?' +'+lines:'');
+      }
+      case 'edit_file':{
+        const f=args.file_path||args.file||args.path||args.filename||'';
+        const short=shortenFilePath(f);
+        const add=args._diff_add||0, del=args._diff_del||0;
+        const diff=(add||del)?` +${add} -${del}`:'';
+        return short+diff;
       }
       case 'execute':{
         return args.command||args.cmd||JSON.stringify(args).slice(0,200);
@@ -453,12 +510,143 @@ function fmtToolArgs(name, args){
       case 'task':{
         return args.description||args.task||JSON.stringify(args).slice(0,150);
       }
+      case 'write_todos':case 'read_todos':{
+        return fmtTodoArgs(args);
+      }
+      case 'save_memory':{
+        const c=args.content||args.text||'';
+        return c.length>100?c.slice(0,100)+'…':c;
+      }
       default:{
         const s=JSON.stringify(args);
         return s.length>200?s.slice(0,200)+'…':s;
       }
     }
   }catch{return JSON.stringify(args).slice(0,200)}
+}
+
+// Generate HTML body for todo list (used in sec-body)
+function fmtTodoBodyHtml(args){
+  const todos=args&&(args.todos||args.items);
+  if(!Array.isArray(todos)||!todos.length) return '';
+  return '<div class="todo-list">'+todos.map(t=>{
+    const st=t.status==='completed'?'✅':t.status==='in_progress'?'🔄':t.status==='cancelled'?'❌':'⬜';
+    return `<div class="todo-row"><span class="todo-st">${st}</span><span class="todo-txt">${esc(t.content||t.text||'')}</span></div>`;
+  }).join('')+'</div>';
+}
+
+// Generate HTML body for task (subagent) result — shows inner tool calls + execution summary
+function fmtTaskBodyHtml(resultStr){
+  if(!resultStr) return '';
+  let data;
+  try{ data=JSON.parse(resultStr); }catch{ return ''; }
+  if(!data||!data._task_meta) return '';
+  if(!data.success){
+    return `<div class="task-inner"><div class="task-inner-row"><span class="ti-info" style="color:var(--fg)">⚠ ${esc(data.error||'Unknown error')}</span></div></div>`;
+  }
+  const summary=data.tool_calls_summary||[];
+  const maxShown=8;
+  let h='<div class="task-inner">';
+  for(let i=0;i<Math.min(summary.length,maxShown);i++){
+    const tc=summary[i];
+    const icon=toolIcon(tc.name||'');
+    const info=tc.info||'';
+    const shortInfo=info.length>90?info.slice(0,87)+'…':info;
+    h+=`<div class="task-inner-row"><span class="ti-icon">${icon}</span><span class="ti-name">${esc(tc.name||'')}</span><span class="ti-info">${esc(shortInfo)}</span></div>`;
+  }
+  if(summary.length>maxShown){
+    h+=`<div class="task-inner-more">… and ${summary.length-maxShown} more tool calls</div>`;
+  }
+  // Execution summary
+  const parts=[];
+  if(data.tool_count>0) parts.push(`${data.tool_count} tool uses`);
+  if(data.execution_time!=null) parts.push(`cost: ${data.execution_time.toFixed(1)}s`);
+  if(parts.length) h+=`<div class="task-summary">Execution Summary: ${parts.join(', ')}</div>`;
+  h+='</div>';
+  return h;
+}
+
+// Shorten file path for display: keep filename + parent dir
+function shortenFilePath(p){
+  if(!p)return '';
+  const parts=p.replace(/\\/g,'/').split('/').filter(Boolean);
+  if(parts.length<=2) return parts.join('/');
+  return '…/'+parts.slice(-2).join('/');
+}
+
+// Tools that need HTML-rendered args (not just plain text escape)
+const RICH_TOOLS=new Set(['task','write_todos','read_todos','read_file','write_file','edit_file']);
+function isRichTool(name){return RICH_TOOLS.has(name)}
+
+// Format todo/task args as readable text
+function fmtTodoArgs(args){
+  if(!args) return '';
+  // write_todos: {todos: [{id,content,status},...]}
+  const todos=args.todos||args.items;
+  if(Array.isArray(todos)){
+    return todos.map(t=>{
+      const st=t.status==='completed'?'✅':t.status==='in_progress'?'🔄':t.status==='cancelled'?'❌':'⬜';
+      return `${st} ${t.content||t.text||''}`;
+    }).join(' | ');
+  }
+  const s=JSON.stringify(args);
+  return s.length>200?s.slice(0,200)+'…':s;
+}
+
+// Rich HTML format for tool args (task, todo, file tools)
+function fmtToolArgsHtml(name, args, argsStr){
+  if(!args||typeof args!=='object') return esc(argsStr||'');
+  // File tools: read_file, write_file, edit_file
+  if(name==='read_file'){
+    const f=args.file_path||args.file||args.path||args.filename||'';
+    const short=shortenFilePath(f);
+    let h=`<span class="file-path" title="${esc(f)}">${esc(short)}</span>`;
+    if(args.offset!=null||args.limit!=null){
+      const s=(args.offset||0)+1, e=args.limit?(args.offset||0)+args.limit:'';
+      h+=` <span class="line-range">L${s}${e?'-'+e:''}</span>`;
+    } else if(args.start_line!=null||args.end_line!=null){
+      const s=args.start_line||1, e=args.end_line||'';
+      h+=` <span class="line-range">L${s}${e?'-'+e:''}</span>`;
+    }
+    return h;
+  }
+  if(name==='write_file'){
+    const f=args.file_path||args.file||args.path||args.filename||'';
+    const short=shortenFilePath(f);
+    const lines=args._lines||0;
+    let h=`<span class="file-path" title="${esc(f)}">${esc(short)}</span>`;
+    if(lines) h+=` <span class="diff-add">+${lines}</span>`;
+    return h;
+  }
+  if(name==='edit_file'){
+    const f=args.file_path||args.file||args.path||args.filename||'';
+    const short=shortenFilePath(f);
+    const add=args._diff_add||0, del=args._diff_del||0;
+    let h=`<span class="file-path" title="${esc(f)}">${esc(short)}</span>`;
+    if(add||del) h+=` <span class="diff-add">+${add}</span> <span class="diff-del">-${del}</span>`;
+    return h;
+  }
+  if(name==='task'){
+    const desc=args.description||args.task||'';
+    const prompt=args.prompt||'';
+    let h=`<span style="font-weight:600">${esc(desc)}</span>`;
+    if(prompt){
+      const short=prompt.length>120?prompt.slice(0,120)+'…':prompt;
+      h+=`<br><span style="opacity:.6;font-size:10px">${esc(short)}</span>`;
+    }
+    return h;
+  }
+  if(name==='write_todos'||name==='read_todos'){
+    const todos=args.todos||args.items;
+    if(Array.isArray(todos)){
+      const icons=todos.map((t,i)=>{
+        const st=t.status==='completed'?'✅':t.status==='in_progress'?'🔄':t.status==='cancelled'?'❌':'⬜';
+        return `${i+1} ${st}`;
+      });
+      return `<span style="font-size:11px">${todos.length} items · ${icons.join(' ')}</span>`;
+    }
+  }
+  return esc(argsStr||'');
 }
 
 // ============ UUID ============
@@ -915,29 +1103,69 @@ function renderMsg(m){
     for(const sec of sections){
       if(sec.type==='thinking'){
         const text=sec.items.map(s=>s.text).join('\n');
-        const preview=text.slice(0,60).replace(/\n/g,' ')+(text.length>60?'…':'');
-        h+=`<div class="sec-block sec-thinking"><div class="sec-toggle" onclick="toggleSec(this)">
-          <span class="arrow">&#x25B8;</span>
-          <span class="sec-icon">💭</span>
-          <span class="sec-lbl">Thinking</span>
-          <span class="sec-detail">${esc(preview)}</span>
-        </div><div class="sec-body">
-          <div class="think-content">${esc(text)}</div>
-        </div></div>`;
+        const isShort=text.length<150&&!text.includes('\n');
+        if(isShort){
+          // Short thinking — inline, no collapse
+          h+=`<div class="sec-block sec-thinking"><div class="sec-toggle" style="cursor:default">
+            <span class="sec-icon">💭</span>
+            <span class="sec-lbl">Thinking</span>
+            <span class="sec-detail">${esc(text)}</span>
+          </div></div>`;
+        } else {
+          const preview=text.slice(0,60).replace(/\n/g,' ')+(text.length>60?'…':'');
+          h+=`<div class="sec-block sec-thinking"><div class="sec-toggle" onclick="toggleSec(this)">
+            <span class="arrow">&#x25B8;</span>
+            <span class="sec-icon">💭</span>
+            <span class="sec-lbl">Thinking</span>
+            <span class="sec-detail">${esc(preview)}</span>
+          </div><div class="sec-body">
+            <div class="think-content">${esc(text)}</div>
+          </div></div>`;
+        }
       } else if(sec.type==='tools'){
         const n=sec.items.length;
-        h+=`<div class="sec-block sec-tools"><div class="sec-toggle" onclick="toggleSec(this)">
-          <span class="arrow">&#x25B8;</span>
-          <span class="sec-icon">🔧</span>
-          <span class="sec-lbl">Tool Calls</span>
-          <span class="sec-detail">${n} tool${n>1?'s':''}</span>
-        </div><div class="sec-body">`;
-        for(const st of sec.items){
+        if(n===1){
+          // Single tool — inline display with tool name in title, no collapse needed
+          const st=sec.items[0];
           const icon=toolIcon(st.name||'');
-          h+=`<div class="tool-item"><span class="t-icon">${icon}</span><span class="t-name">${esc(st.name||'tool')}</span><span class="t-args">${esc(st.argsStr||'')}</span></div>`;
-          if(st.result) h+=`<div class="tool-result">${esc(st.result)}</div>`;
+          const dname=toolDisplay(st.name||'tool');
+          const sclass=toolSecClass(st.name||'');
+          const argsHtml=isRichTool(st.name)?fmtToolArgsHtml(st.name,st.rawArgs,st.argsStr):esc(st.argsStr||'');
+          const isTodo=(st.name==='write_todos'||st.name==='read_todos');
+          const isTask=(st.name==='task');
+          const todoBody=isTodo?fmtTodoBodyHtml(st.rawArgs):'';
+          const taskBody=isTask?fmtTaskBodyHtml(st.result):'';
+          const hasBody=st.result||todoBody||taskBody;
+          h+=`<div class="sec-block ${sclass}"><div class="sec-toggle"${hasBody?' onclick="toggleSec(this)" style="cursor:pointer"':' style="cursor:default"'}>
+            ${hasBody?'<span class="arrow">&#x25B8;</span>':''}
+            <span class="sec-icon">${icon}</span>
+            <span class="sec-lbl tool-inline">${esc(dname)}</span>
+            <span class="sec-detail tool-inline-args">${argsHtml}</span>
+          </div>`;
+          if(hasBody){
+            let bodyH='';
+            if(todoBody) bodyH+=todoBody;
+            if(taskBody) bodyH+=taskBody;
+            if(st.result&&!taskBody) bodyH+=`<div class="tool-result" style="padding-left:12px">${esc(st.result)}</div>`;
+            h+=`<div class="sec-body">${bodyH}</div>`;
+          }
+          h+=`</div>`;
+        } else {
+          h+=`<div class="sec-block sec-tools"><div class="sec-toggle" onclick="toggleSec(this)">
+            <span class="arrow">&#x25B8;</span>
+            <span class="sec-icon">🔧</span>
+            <span class="sec-lbl">Tool Calls</span>
+            <span class="sec-detail">${n} tools</span>
+          </div><div class="sec-body">`;
+          for(const st of sec.items){
+            const icon=toolIcon(st.name||'');
+            const dname=toolDisplay(st.name||'tool');
+            const argsHtml=isRichTool(st.name)?fmtToolArgsHtml(st.name,st.rawArgs,st.argsStr):esc(st.argsStr||'');
+            h+=`<div class="tool-item"><span class="t-icon">${icon}</span><span class="t-name">${esc(dname)}</span><span class="t-args">${argsHtml}</span></div>`;
+            if(st.result) h+=`<div class="tool-result">${esc(st.result)}</div>`;
+          }
+          h+=`</div></div>`;
         }
-        h+=`</div></div>`;
       }
     }
   }
@@ -1079,7 +1307,7 @@ async function sendMessage(){
             curThinking='';
             const name=evt.data.name||'tool';
             const argsStr=fmtToolArgs(name,evt.data.args);
-            aiMsg.steps.push({type:'tool',name:name,text:name,argsStr:argsStr});
+            aiMsg.steps.push({type:'tool',name:name,text:name,argsStr:argsStr,rawArgs:evt.data.args});
             updateLiveSteps(aiMsg);
           } else if(evt.event==='tool_result'){
             // Attach result to the last matching tool step (by name, fallback to last tool)
@@ -1193,37 +1421,95 @@ function updateLiveSteps(msg){
       const userState=userToggledSections[si];
 
       if(sec.type==='thinking'){
-        // Update content
-        const tc=existing.querySelector('.think-content');
         const text=sec.items.map(s=>s.text).join('\n');
-        if(tc) tc.textContent=text;
-        // Update label
+        const isShort=text.length<150&&!text.includes('\n');
+        const detail=existing.querySelector('.sec-detail');
+        const tc=existing.querySelector('.think-content');
         const lbl=existing.querySelector('.sec-lbl');
-        if(lbl) lbl.textContent=isLast?'Thinking…':'Thinking';
-        // Open/close: respect user toggle; otherwise default (last=open, others=closed)
-        if(userState===undefined){
-          const shouldOpen=isLast;
-          body.classList.toggle('open',shouldOpen);
-          arrow.classList.toggle('open',shouldOpen);
+
+        if(isShort&&!isLast){
+          // Convert to inline display
+          if(detail) detail.textContent=text;
+          if(lbl) lbl.textContent='Thinking';
+          if(body) body.classList.remove('open');
+          if(arrow) arrow.style.display='none';
+          existing.querySelector('.sec-toggle').onclick=null;
+          existing.querySelector('.sec-toggle').style.cursor='default';
+        } else {
+          // Collapsible — still streaming or long
+          if(tc) tc.textContent=text;
+          if(lbl) lbl.textContent=isLast?'Thinking…':'Thinking';
+          if(detail){
+            const preview=text.slice(0,60).replace(/\n/g,' ')+(text.length>60?'…':'');
+            detail.textContent=preview;
+          }
+          if(arrow) arrow.style.display='';
+          if(userState===undefined){
+            const shouldOpen=isLast;
+            if(body) body.classList.toggle('open',shouldOpen);
+            if(arrow) arrow.classList.toggle('open',shouldOpen);
+          }
         }
       } else if(sec.type==='tools'){
-        // Update tool count
         const n=sec.items.length;
-        const detail=existing.querySelector('.sec-detail');
-        if(detail) detail.textContent=`${n} tool${n>1?'s':''}`;
-        // Rebuild tool items inside sec-body
-        let itemsH='';
-        for(const st of sec.items){
+        if(n===1){
+          // Single tool — inline in title
+          const st=sec.items[0];
           const icon=toolIcon(st.name||'');
-          itemsH+=`<div class="tool-item"><span class="t-icon">${icon}</span><span class="t-name">${esc(st.name||'tool')}</span><span class="t-args">${esc(st.argsStr||'')}</span></div>`;
-          if(st.result) itemsH+=`<div class="tool-result">${esc(st.result)}</div>`;
-        }
-        body.innerHTML=itemsH;
-        // Open/close: respect user toggle
-        if(userState===undefined){
-          const shouldOpen=isLast;
-          body.classList.toggle('open',shouldOpen);
-          arrow.classList.toggle('open',shouldOpen);
+          const dname=toolDisplay(st.name||'tool');
+          const sclass=toolSecClass(st.name||'');
+          const argsHtml=isRichTool(st.name)?fmtToolArgsHtml(st.name,st.rawArgs,st.argsStr):esc(st.argsStr||'');
+          const isTodo=(st.name==='write_todos'||st.name==='read_todos');
+          const isTask=(st.name==='task');
+          const todoBody=isTodo?fmtTodoBodyHtml(st.rawArgs):'';
+          const taskBody=isTask?fmtTaskBodyHtml(st.result):'';
+          // Update sec-block class for todo/task styling
+          existing.className='sec-block '+sclass;
+          const toggle=existing.querySelector('.sec-toggle');
+          const iconEl=existing.querySelector('.sec-icon');
+          const lbl=existing.querySelector('.sec-lbl');
+          const detail=existing.querySelector('.sec-detail');
+          if(iconEl) iconEl.textContent=icon;
+          if(lbl){lbl.textContent=dname;lbl.classList.add('tool-inline');}
+          if(detail){detail.innerHTML=argsHtml;detail.classList.add('tool-inline-args');}
+          // Show arrow+body if there's a result, todo body, or task body
+          const hasBody=st.result||todoBody||taskBody;
+          if(body){
+            if(hasBody){
+              let bodyH='';
+              if(todoBody) bodyH+=todoBody;
+              if(taskBody) bodyH+=taskBody;
+              if(st.result&&!taskBody) bodyH+=`<div class="tool-result" style="padding-left:12px">${esc(st.result)}</div>`;
+              body.innerHTML=bodyH;
+              if(arrow){arrow.style.display='';toggle.onclick=function(){toggleLiveSec(this,si)}; toggle.style.cursor='pointer';}
+            } else {
+              body.innerHTML='';
+              if(arrow) arrow.style.display='none';
+              toggle.style.cursor='default';
+            }
+          }
+          if(userState===undefined&&body){
+            body.classList.toggle('open',isLast&&!!hasBody);
+            if(arrow) arrow.classList.toggle('open',isLast&&!!hasBody);
+          }
+        } else {
+          // Multi-tool — standard collapsible
+          const detail=existing.querySelector('.sec-detail');
+          if(detail) detail.textContent=`${n} tools`;
+          let itemsH='';
+          for(const st of sec.items){
+            const icon=toolIcon(st.name||'');
+            const dname=toolDisplay(st.name||'tool');
+            const argsHtml=isRichTool(st.name)?fmtToolArgsHtml(st.name,st.rawArgs,st.argsStr):esc(st.argsStr||'');
+            itemsH+=`<div class="tool-item"><span class="t-icon">${icon}</span><span class="t-name">${esc(dname)}</span><span class="t-args">${argsHtml}</span></div>`;
+            if(st.result) itemsH+=`<div class="tool-result">${esc(st.result)}</div>`;
+          }
+          if(body) body.innerHTML=itemsH;
+          if(userState===undefined){
+            const shouldOpen=isLast;
+            if(body) body.classList.toggle('open',shouldOpen);
+            if(arrow) arrow.classList.toggle('open',shouldOpen);
+          }
         }
       }
     } else {
@@ -1232,30 +1518,49 @@ function updateLiveSteps(msg){
       if(sec.type==='thinking'){
         const text=sec.items.map(s=>s.text).join('\n');
         div.className='sec-block sec-thinking';
+        // During streaming, thinking is always expanding so use collapsible
         div.innerHTML=`<div class="sec-toggle" onclick="toggleLiveSec(this,${si})">
           <span class="arrow${isLast?' open':''}">&#x25B8;</span>
           <span class="sec-icon">💭</span>
           <span class="sec-lbl">Thinking${isLast?'…':''}</span>
+          <span class="sec-detail"></span>
         </div><div class="sec-body${isLast?' open':''}">
           <div class="think-content">${esc(text)}</div>
         </div>`;
       } else if(sec.type==='tools'){
         const n=sec.items.length;
-        div.className='sec-block sec-tools';
-        let itemsH='';
-        for(const st of sec.items){
+        if(n===1){
+          const st=sec.items[0];
           const icon=toolIcon(st.name||'');
-          itemsH+=`<div class="tool-item"><span class="t-icon">${icon}</span><span class="t-name">${esc(st.name||'tool')}</span><span class="t-args">${esc(st.argsStr||'')}</span></div>`;
-          if(st.result) itemsH+=`<div class="tool-result">${esc(st.result)}</div>`;
+          const dname=toolDisplay(st.name||'tool');
+          const sclass=toolSecClass(st.name||'');
+          const argsHtml=isRichTool(st.name)?fmtToolArgsHtml(st.name,st.rawArgs,st.argsStr):esc(st.argsStr||'');
+          div.className='sec-block '+sclass;
+          div.innerHTML=`<div class="sec-toggle" style="cursor:default">
+            <span class="arrow" style="display:none">&#x25B8;</span>
+            <span class="sec-icon">${icon}</span>
+            <span class="sec-lbl tool-inline">${esc(dname)}</span>
+            <span class="sec-detail tool-inline-args">${argsHtml}</span>
+          </div><div class="sec-body"></div>`;
+        } else {
+          let itemsH='';
+          for(const st of sec.items){
+            const icon=toolIcon(st.name||'');
+            const dname=toolDisplay(st.name||'tool');
+            const argsHtml=isRichTool(st.name)?fmtToolArgsHtml(st.name,st.rawArgs,st.argsStr):esc(st.argsStr||'');
+            itemsH+=`<div class="tool-item"><span class="t-icon">${icon}</span><span class="t-name">${esc(dname)}</span><span class="t-args">${argsHtml}</span></div>`;
+            if(st.result) itemsH+=`<div class="tool-result">${esc(st.result)}</div>`;
+          }
+          div.className='sec-block sec-tools';
+          div.innerHTML=`<div class="sec-toggle" onclick="toggleLiveSec(this,${si})">
+            <span class="arrow${isLast?' open':''}">&#x25B8;</span>
+            <span class="sec-icon">🔧</span>
+            <span class="sec-lbl">Tool Calls</span>
+            <span class="sec-detail">${n} tools</span>
+          </div><div class="sec-body${isLast?' open':''}">
+            ${itemsH}
+          </div>`;
         }
-        div.innerHTML=`<div class="sec-toggle" onclick="toggleLiveSec(this,${si})">
-          <span class="arrow${isLast?' open':''}">&#x25B8;</span>
-          <span class="sec-icon">🔧</span>
-          <span class="sec-lbl">Tool Calls</span>
-          <span class="sec-detail">${n} tool${n>1?'s':''}</span>
-        </div><div class="sec-body${isLast?' open':''}">
-          ${itemsH}
-        </div>`;
       }
       // Close previous last section if user didn't manually toggle it
       if(el.children.length>0){
@@ -1274,7 +1579,7 @@ function updateLiveSteps(msg){
 
   // Auto-scroll the last open sec-body
   const bodies=el.querySelectorAll('.sec-body.open');
-  if(bodies.length){const last=bodies[bodies.length-1];last.scrollTop=last.scrollHeight}
+  if(bodies.length){const last=bodies[bodies.length-1];last.scrollTop=last.scrollHeight};
   autoScroll();
 }
 

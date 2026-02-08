@@ -7,13 +7,12 @@
 - 调度器工具集成（定时任务）
 """
 import asyncio
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Callable, List, Any, Dict
 
 from loguru import logger
-import sys
-sys.path.append("/Users/xuming/Documents/Codes/agentica")
 from agentica import DeepAgent
 from agentica.run_response import AgentCancelledError
 from agentica.db import SqliteDb
@@ -385,13 +384,30 @@ class AgentService:
                     if tool_info:
                         tool_name = tool_info.get("tool_name") or tool_info.get("name", "unknown")
                         tool_args = tool_info.get("tool_args") or tool_info.get("arguments", {})
-                        # 截断过长的参数值
+                        # 截断过长的参数值，并为文件操作工具计算行数 diff 元数据
                         display_args = {}
-                        for k, v in tool_args.items():
-                            if isinstance(v, str) and len(v) > 100:
-                                display_args[k] = v[:100] + "..."
-                            else:
-                                display_args[k] = v
+                        if tool_name == 'edit_file':
+                            old_s = tool_args.get('old_string', '')
+                            new_s = tool_args.get('new_string', '')
+                            old_lines = old_s.count('\n') + (1 if old_s else 0)
+                            new_lines = new_s.count('\n') + (1 if new_s else 0)
+                            display_args['_diff_add'] = new_lines
+                            display_args['_diff_del'] = old_lines
+                            fp = tool_args.get('file_path', '') or tool_args.get('file', '') or tool_args.get('path', '')
+                            if fp:
+                                display_args['file_path'] = fp
+                        elif tool_name == 'write_file':
+                            content = tool_args.get('content', '')
+                            display_args['_lines'] = content.count('\n') + (1 if content else 0)
+                            fp = tool_args.get('file_path', '') or tool_args.get('file', '') or tool_args.get('path', '')
+                            if fp:
+                                display_args['file_path'] = fp
+                        else:
+                            for k, v in tool_args.items():
+                                if isinstance(v, str) and len(v) > 100:
+                                    display_args[k] = v[:100] + "..."
+                                else:
+                                    display_args[k] = v
                         tools_used.append(tool_name)
                         tool_calls += 1
                         if on_tool_call:
@@ -406,6 +422,25 @@ class AgentService:
                                 t_name = tool_info.get("tool_name") or tool_info.get("name", "unknown")
                                 t_content = tool_info.get("content", "")
                                 is_error = tool_info.get("tool_call_error", False)
+
+                                # task 工具特殊处理：解析 JSON 提取子代理执行信息
+                                if t_name == "task" and t_content:
+                                    try:
+                                        task_data = json.loads(str(t_content))
+                                        task_meta = {
+                                            "_task_meta": True,
+                                            "success": task_data.get("success", False),
+                                            "tool_calls_summary": task_data.get("tool_calls_summary", []),
+                                            "execution_time": task_data.get("execution_time"),
+                                            "tool_count": task_data.get("tool_count", 0),
+                                        }
+                                        if not task_data.get("success"):
+                                            task_meta["error"] = task_data.get("error", "Unknown error")
+                                        await on_tool_result(t_name, json.dumps(task_meta, ensure_ascii=False))
+                                        break
+                                    except (ValueError, TypeError):
+                                        pass  # Fall through to default handling
+
                                 if t_content:
                                     result_str = str(t_content)[:500] + ("..." if len(str(t_content)) > 500 else "")
                                 else:

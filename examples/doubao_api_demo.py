@@ -113,9 +113,6 @@ def test_stream_with_tools(client):
 async def test_agentica_agent():
     """测试5: 通过 agentica DeepAgent 简单调用"""
     print("\n[Test 5] agentica DeepAgent (简单模式)")
-
-    import sys
-    sys.path.append("/Users/xuming/Documents/Codes/agentica")
     from agentica import DeepAgent, Doubao
 
     agent = DeepAgent(
@@ -133,9 +130,6 @@ async def test_agentica_agent():
 async def test_agentica_stream_intermediate():
     """测试6: 模拟 agent_service.chat_stream 完整调用（stream_intermediate_steps=True）"""
     print("\n[Test 6] agentica DeepAgent (stream_intermediate_steps=True)")
-
-    import sys
-    sys.path.append("/Users/xuming/Documents/Codes/agentica")
     from agentica import DeepAgent, Doubao
 
     agent = DeepAgent(
